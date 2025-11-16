@@ -1,7 +1,5 @@
 # osbb_crawler/spiders/osbb_registry_spider.py
 import scrapy
-# Нам не потрібен Item, оскільки ми збираємо URL для іншого павука.
-# Але для прикладу залишимо його структуру.
 from ..items import OsbbRecordItem
 from ..items import DatasetItem
 from ..processors import process_file_content
@@ -14,107 +12,128 @@ class OsbbRegistrySpider(scrapy.Spider):
     start_urls = ['https://data.gov.ua/dataset?q=%D0%BE%D1%81%D0%B1%D0%B1&sort=score+desc%2C+metadata_modified+desc&_organization_limit=0']
 
     # Формати, які ми хочемо завантажити (файли даних)
-    TARGET_FORMATS = ['csv', 'json', 'xlsx', 'xls', 'api'] 
+    TARGET_FORMATS = ['csv', 'json', 'api', 'xlsx', 'xls'] 
 
-    # =================================================================
-    # !!! ТИМЧАСОВА ЛОГІКА ДЛЯ ТЕСТУВАННЯ ОДНОГО ФАЙЛУ !!!
-    # Після тестування цей метод потрібно ЗАКОМЕНТУВАТИ або ВИДАЛИТИ.
-    # =================================================================
-    def start_requests(self):
-        # 1. Замініть цей URL на реальне ПРЯМЕ посилання на файл (з Кроку 1)
-        TEST_FILE_URL = 'https://admin-gis.khm.gov.ua/public-api/get/data_infrastructure.osbb?key=4236665236&limit=100'
-        
-        # 2. Вкажіть формат файлу, який ви тестуєте
-        FILE_FORMAT = 'JSON' # Або 'JSON', 'XLSX'
 
-        # Створюємо фіктивний DatasetItem для передачі метаданих в parse_file_content
-        test_item = DatasetItem(
-            title='Test Single File', 
-            page_url='http://test-page.local',
-            download_link=TEST_FILE_URL,
-            data_format=FILE_FORMAT
-        )
-        
-        self.logger.info(f"Запуск тестування парсингу файлу: {TEST_FILE_URL}")
-        
-        # Генеруємо запит, який одразу викликає parse_file_content
-        yield scrapy.Request(
-            url=TEST_FILE_URL,
-            callback=self.parse_file_content,
-            meta={'dataset_metadata': test_item}
-        )
+    # У вашому Spider (osbb_crawler/spiders/osbb_registry.py)
+
+    # У вашому Spider (osbb_crawler/spiders/osbb_registry.py)
 
     def parse(self, response):
-        """
-        Обробляє сторінку зі списком наборів даних (Перший рівень).
-        """
+        # Селектор li.info-list__item підтверджено
         dataset_items = response.css('li.info-list__item')
-        
-        for item_block in dataset_items:
-            # Витягуємо посилання на деталі
-            detail_url_partial = item_block.css('h3.info-list__item-content-heading a::attr(href)').get()
+
+        for item in dataset_items:
+            # Збір даних для передачі: Назва, Опис, URL
+            dataset_title = item.css('h3.info-list__item-content-heading a.truncate::text').get(default='').strip()
             
-            # Перевіряємо, чи є потрібний формат у списку міток формату
-            format_labels = item_block.css('div.info-list__item-content ul.formats li::text').getall()
-            has_target_format = any(
-                fmt.lower().strip() in self.TARGET_FORMATS for fmt in format_labels
-            )
+            # Опис знаходиться в div одразу після h3, або можна спробувати більш специфічний селектор:
+            description_lines = item.css('div.info-list__item-content div::text').getall()
+            description = ' '.join(line.strip() for line in description_lines if line.strip())
             
-            if has_target_format and detail_url_partial:
-                full_detail_url = response.urljoin(detail_url_partial)
+            relative_url = item.css('h3.info-list__item-content-heading a.truncate::attr(href)').get()
+            
+            if relative_url:
+                dataset_url = response.urljoin(relative_url)
                 
-                # Генеруємо запит на деталі
+                # Передаємо назву та опис через 'meta'
                 yield scrapy.Request(
-                    url=full_detail_url, 
+                    dataset_url, 
                     callback=self.parse_dataset_details,
-                    cb_kwargs={
-                        'name': item_block.css('h3.info-list__item-content-heading a::text').get().strip(),
-                        'description': item_block.css('div.info-list__item-content div:nth-child(4)::text').get().strip()
+                    meta={
+                        'dataset_title': dataset_title,
+                        'dataset_description': description
                     }
                 )
-        
-        # 3. Обробка Пагінації (Перехід на наступну сторінку)
-        # Цей CKAN використовує пагінацію в кінці сторінки. 
-        # Потрібно знайти посилання на наступну сторінку.
-        # Точний селектор пагінації потрібно знайти на повній сторінці, але типовий вигляд:
-        next_page = response.css('li.next a::attr(href)').get() 
-        
-        if next_page is not None:
+
+        # Логіка пагінації
+        next_page = response.css('.pagination a[rel="next"]::attr(href)').get()
+        if next_page:
             yield response.follow(next_page, callback=self.parse)
-
-
-    def parse_dataset_details(self, response, name, description):
-        """
-        Обробляє детальні сторінки, знаходить прямі посилання на файли і 
-        створює DatasetItem.
-        """
-        # Типовий селектор для елементів ресурсів на деталях CKAN-сторінки
-        resource_links = response.css('section.additional-info div.resource-item')
         
-        for link_item in resource_links:
-            download_url = link_item.css('a.btn::attr(href)').get()
-            format_label = link_item.css('a.format-label::text').get() 
+
+
+    # У вашому Spider (osbb_crawler/spiders/osbb_registry.py)
+    # Припускаємо, що self.TARGET_FORMATS визначено, наприклад:
+    # TARGET_FORMATS = ['csv', 'xlsx', 'xls', 'json', 'xml'] 
+
+    def parse_dataset_details(self, response):
+        """
+        Обробляє детальні сторінки, знаходить ПРІОРИТЕТНЕ посилання на файл 
+        і створює DatasetItem/запит, використовуючи вашу логіку пріоритетів.
+        """
+        name = response.meta.get('dataset_title', 'N/A')
+        description = response.meta.get('dataset_description', 'N/A')
+
+        available_resources = {}
+
+        # *** ОНОВЛЕНІ СЕЛЕКТОРИ КОНТЕЙНЕРІВ РЕСУРСІВ ***
+        # Використовуємо клас, що містить і посилання, і формат
+        resource_containers = response.css('div.resource-list__item-download')
+        
+        # Якщо цей контейнер знаходиться всередині li.resource-list__item, 
+        # можливо, краще шукати li, що містить цей div, але почнемо з прямого div.
+        # Спробуємо також захопити li, оскільки можуть бути інші формати, які виглядають інакше
+        if not resource_containers:
+            resource_containers = response.css('li.resource-list__item, li.list-group-item')
+
+        # Етап 1: Збираємо всі доступні ресурси
+        for item in resource_containers:
             
-            if download_url and format_label and format_label.strip().lower() in self.TARGET_FORMATS:
+            # 1. Пошук URL (На основі вашого HTML)
+            # Посилання знаходиться всередині елемента-контейнера
+            download_url = item.css('a.resource-url-analytics::attr(href)').get() 
+            
+            # Резервна копія для старих шаблонів
+            if not download_url:
+                download_url = item.css('a.btn::attr(href)').get()
                 
-                # Створюємо DatasetItem
-                dataset_item = DatasetItem()
-                dataset_item['title'] = name
-                dataset_item['description'] = description
-                dataset_item['page_url'] = response.url
-                dataset_item['download_link'] = response.urljoin(download_url)
-                dataset_item['data_format'] = format_label.strip().upper()
+            # 2. Пошук Формату (На основі вашого HTML: <p class="label">CSV</p>)
+            format_label = (
+                item.css('p.label::text').get() or # <--- НОВИЙ СЕЛЕКТОР (НАЙТОЧНІШИЙ)
+                item.css('span.label-info::text').get() or 
+                item.css('a.format-label::text').get() 
+            )
+            
+            if download_url and format_label:
+                norm_format = format_label.strip().lower()
                 
-                # !!! КЛЮЧОВИЙ МОМЕНТ: Генеруємо запит на сам файл !!!
-                # Ми використовуємо тут метод `parse_file_content`, який буде визначено 
-                # як наступний крок.
-                
-                yield scrapy.Request(
-                    url=dataset_item['download_link'],
-                    callback=self.parse_file_content,
-                    # Передаємо метадані набору даних, щоб знати джерело
-                    meta={'dataset_metadata': dataset_item}
-                )
+                # Перевірка, чи це один із цільових форматів
+                if norm_format in self.TARGET_FORMATS:
+                    available_resources[norm_format] = response.urljoin(download_url)
+            
+        # Етап 2: Знаходимо найбільш пріоритетний ресурс
+        best_format = None
+        best_url = None
+        
+        for target_format in self.TARGET_FORMATS:
+            if target_format in available_resources:
+                best_format = target_format
+                best_url = available_resources[target_format]
+                break
+        
+        # Етап 3: Створення запиту, якщо ресурс знайдено
+        if best_url:
+            # Тут треба використати вашу модель Item, наприклад, OsbbCrawlerItem
+            # Я використовую фіктивний DatasetItem для прикладу
+            dataset_item = {
+                'title': name,
+                'description': description,
+                'page_url': response.url,
+                'download_link': best_url,
+                'data_format': best_format.upper(), 
+            }
+            
+            self.logger.info(f"Набір '{name}' обрано: {best_format.upper()}")
+            
+            # Генеруємо запит на ПРІОРИТЕТНИЙ файл
+            yield scrapy.Request(
+                url=best_url,
+                callback=self.parse_file_content,
+                meta={'dataset_metadata': dataset_item}
+            )
+        else:
+            self.logger.info(f"Набір '{name}' ігнорується: не знайдено жодного цільового формату.")
 
     def parse_file_content(self, response):
         """
