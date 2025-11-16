@@ -29,6 +29,12 @@ class OsbbRecordItem(scrapy.Item):
     
     # Фізична адреса реєстрації
     address = scrapy.Field()
+
+    #Місто
+    city = scrapy.Field()
+
+    #Область
+    region = scrapy.Field()
     
     # Контактний телефон
     phone = scrapy.Field()
