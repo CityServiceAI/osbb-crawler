@@ -2,6 +2,7 @@
 import io
 import csv
 import json
+import pandas as pd
 from .items import OsbbRecordItem
 # Якщо потрібен Excel, тут знадобиться 'pandas' або 'openpyxl'
 
@@ -30,10 +31,10 @@ def find_value_by_priority(record: dict, field_name: str, mappings: dict) -> str
     return None
 
 FIELD_MAPPINGS = {
-    'name': ['Назва', 'Назва ОСББ', 'Повна назва', 'OSBB_NAME', 'TheNameOfTheACMB', 'entityName'],
-    'edrpou': ['ЄДРПОУ', 'Код ЄДРПОУ', 'ЕДРПОУ', 'Code', 'EDRPOU'],
-    'address': ['Адреса', 'Місцезнаходження', 'Юридична адреса', 'Address', 'ADDR', 'LegalAddress', 'address_post_name'],
-    'phone': ['Телефон', 'Phone', 'osbb_phone', 'Phone_number', "Номер телефону", 'ContactTel'],
+    'name': ['Назва', 'Назва ОСББ', 'Повна назва', 'OSBB_NAME', 'TheNameOfTheACMB', 'entityName', 'condominiumName', 'name_osbb'],
+    'edrpou': ['ЄДРПОУ', 'Код ЄДРПОУ', 'ЕДРПОУ','ЄДРПОУ', 'Code', 'EDRPOU', 'osbb_edrpoy'],
+    'address': ['Адреса', 'Місцезнаходження', 'Юридична адреса', 'Юридична Адреса', 'Address', 'ADDR', 'LegalAddress', 'address_post_name', 'address', 'adressa_osbb'],
+    'phone': ['Телефон', 'Phone', 'osbb_phone', 'Phone_number', "Номер телефону", 'ContactTel', 'Контактний тел'],
     'email': ['Email', 'E-mail', 'Електронна пошта'],
 
     # Географічні одиниці (не використовуємо для 'address', оскільки воно об'єднується)
@@ -44,8 +45,6 @@ FIELD_MAPPINGS = {
     'address_street': ['addressThoroughfare', 'Street', 'Вулиця', 'address_thoroughfare'],
     'address_house': ['addressLocatorDesignator', 'address_locator_designator', 'House', 'Номер будинку', 'будинок'],
     
-    # Резервний варіант для 'address', якщо об'єднання неможливе
-    'address_full': ['Адреса', 'Місцезнаходження', 'Юридична адреса', 'Address', 'ADDR', 'Місцезнаходження юридичної особи'],
 }
 
 def process_file_content(raw_content: bytes, data_format: str, source_url: str):
@@ -59,10 +58,8 @@ def process_file_content(raw_content: bytes, data_format: str, source_url: str):
         yield from parse_csv(raw_content, source_url)
     elif data_format in ['JSON', 'API']:
         yield from parse_json(raw_content, source_url)
-    elif data_format in ['XLS', 'XLSX']:
-        # Потрібна зовнішня бібліотека. Логіку додасте пізніше.
-        print(f"Потрібна логіка для парсингу Excel ({data_format})")
-        pass
+    elif data_format in ['XLS', 'XLSX']: 
+        yield from parse_excel(raw_content, source_url)
     else:
         print(f"Непідтримуваний формат: {data_format}")
 
@@ -85,7 +82,14 @@ def parse_csv(raw_content: bytes, source_url: str):
     # Для простоти поки що сподіваємося, що DictReader робить це або заголовки чисті.
     # Якщо будуть проблеми, цей етап треба додати.
 
-    reader = csv.DictReader(io.StringIO(text_content))
+    try:
+        # Пробуємо вивести діалект/роздільник
+        dialect = csv.Sniffer().sniff(text_content[:1024])
+        reader = csv.DictReader(csv_file, dialect=dialect)
+    except Exception:
+        # Якщо Sniffer не впорався, використовуємо кому за замовчуванням
+        csv_file.seek(0) # Переводимо курсор на початок
+        reader = csv.DictReader(csv_file)
     
     for row in reader:
         # Для DictReader ключі row — це заголовки файлу. 
@@ -108,12 +112,12 @@ def parse_csv(raw_content: bytes, source_url: str):
         osbb['city'] = find_value_by_priority(normalized_row, 'city', FIELD_MAPPINGS)
 
         # --- 2. Об'єднання адреси ---
+        final_address = find_value_by_priority(normalized_row, 'address', FIELD_MAPPINGS)
         street = find_value_by_priority(normalized_row, 'address_street', FIELD_MAPPINGS)
         house = find_value_by_priority(normalized_row, 'address_house', FIELD_MAPPINGS)
-        final_address = ', '.join([p for p in [street, house] if p])
-        
+       
         if not final_address:
-            final_address = find_value_by_priority(normalized_row, 'address_full', FIELD_MAPPINGS)
+             final_address = ', '.join([p for p in [street, house] if p])
         
         osbb['address'] = final_address
         osbb['source_dataset_url'] = source_url
@@ -137,7 +141,7 @@ def parse_csv(raw_content: bytes, source_url: str):
 def parse_json(raw_content: bytes, source_url: str):
     """
     Парсить вміст JSON-файлу і генерує OsbbRecordItem.
-    Підтримує прямий список, а також вкладення у ключах 'records' або 'data'.
+    Підтримує прямий список, а також вкладення у ключах 'records', 'data' або 'features' (GeoJSON).
     """
     try:
         data = json.loads(raw_content)
@@ -147,47 +151,62 @@ def parse_json(raw_content: bytes, source_url: str):
 
     records = []
     
-    # 1. Якщо корінь JSON – це одразу список, використовуємо його
+    # 1. Визначення, де знаходиться масив записів
+    
+    # Якщо корінь JSON – це одразу список, використовуємо його
     if isinstance(data, list):
         records = data
         
-    # 2. Якщо корінь – словник, шукаємо в ньому список ОСББ:
+    # Якщо корінь – словник, шукаємо в ньому список ОСББ:
     elif isinstance(data, dict):
-        # Шукаємо у ключі 'data' (як ви виявили)
-        if 'data' in data and isinstance(data['data'], list):
-            records = data['data']
-        # Або шукаємо у ключі 'records' (загальна конвенція)
-        elif 'records' in data and isinstance(data['records'], list):
-            records = data['records']
+        # Перевіряємо поширені ключі, включаючи GeoJSON-подібний 'features'
+        for key in ['data', 'records', 'features']:
+            if key in data and isinstance(data[key], list):
+                records = data[key]
+                break
             
     
     if not records:
-        print(f"!!! ПОПЕРЕДЖЕННЯ: Список об'єктів ОСББ не знайдено в корені, 'data' або 'records'. Перевірте структуру: {source_url}")
-        return # Якщо список порожній або не знайдено, завершуємо роботу.
+        print(f"!!! ПОПЕРЕДЖЕННЯ: Список об'єктів ОСББ не знайдено в корені, 'data', 'records' або 'features'. Перевірте структуру: {source_url}")
+        return
 
-    # 3. Обробка знайденого списку
+    # 2. Обробка знайденого списку та нормалізація джерела
     for record in records:
+        
+        # Визначаємо джерело даних. Якщо це GeoJSON Feature, 
+        # використовуємо вкладений словник 'properties'.
+        if isinstance(record, dict) and record.get('type') == 'Feature' and isinstance(record.get('properties'), dict):
+            source_record = record['properties']
+        else:
+            # Інакше використовуємо сам запис
+            source_record = record
+            
+        # Якщо з якоїсь причини запис не є словником, пропускаємо його
+        if not isinstance(source_record, dict):
+             print(f"!!! ПОПЕРЕДЖЕННЯ: Запис не є словником і буде пропущений: {source_url}")
+             continue
+            
         osbb = OsbbRecordItem()
         
-        # Якщо це GeoJSON, дані можуть бути вкладені у 'properties'
-        normalized_record = record.get('properties') if record.get('type') == 'Feature' and isinstance(record.get('properties'), dict) else record
+        # --- 1. Збір даних (використовуємо source_record) ---
+        osbb['name'] = find_value_by_priority(source_record, 'name', FIELD_MAPPINGS)
+        osbb['edrpou'] = find_value_by_priority(source_record, 'edrpou', FIELD_MAPPINGS)
+        osbb['phone'] = find_value_by_priority(source_record, 'phone', FIELD_MAPPINGS)
+        osbb['email'] = find_value_by_priority(source_record, 'email', FIELD_MAPPINGS)
         
-        # --- 1. Збір даних ---
-        osbb['name'] = find_value_by_priority(normalized_record, 'name', FIELD_MAPPINGS)
-        osbb['edrpou'] = find_value_by_priority(normalized_record, 'edrpou', FIELD_MAPPINGS)
-        osbb['phone'] = find_value_by_priority(normalized_record, 'phone', FIELD_MAPPINGS)
-        osbb['email'] = find_value_by_priority(normalized_record, 'email', FIELD_MAPPINGS)
+        osbb['region'] = find_value_by_priority(source_record, 'region', FIELD_MAPPINGS)
+        osbb['city'] = find_value_by_priority(source_record, 'city', FIELD_MAPPINGS)
         
-        osbb['region'] = find_value_by_priority(normalized_record, 'region', FIELD_MAPPINGS)
-        osbb['city'] = find_value_by_priority(normalized_record, 'city', FIELD_MAPPINGS)
+        # --- 2. Об'єднання адреси ---
+        # Спочатку шукаємо повну адресу
+        final_address = find_value_by_priority(source_record, 'address_full', FIELD_MAPPINGS)
         
-        # --- 2. Об'єднання адреси (Логіка, перенесена з CSV) ---
-        street = find_value_by_priority(normalized_record, 'address_street', FIELD_MAPPINGS)
-        house = find_value_by_priority(normalized_record, 'address_house', FIELD_MAPPINGS)
-        final_address = ', '.join([p for p in [street, house] if p])
+        # Якщо повну адресу не знайдено, пробуємо зібрати з компонентів
+        street = find_value_by_priority(source_record, 'address_street', FIELD_MAPPINGS)
+        house = find_value_by_priority(source_record, 'address_house', FIELD_MAPPINGS)
         
         if not final_address:
-            final_address = find_value_by_priority(normalized_record, 'address_full', FIELD_MAPPINGS)
+             final_address = ', '.join([p for p in [street, house] if p])
         
         osbb['address'] = final_address
         osbb['source_dataset_url'] = source_url
@@ -205,23 +224,62 @@ def parse_json(raw_content: bytes, source_url: str):
         else:
             print(f"!!! ПОПЕРЕДЖЕННЯ: Пропущено рядок (немає ЄДРПОУ/Адреси) з JSON/API: {source_url}")
 
+# osbb_crawler/processors.py
+
+# ... (інші функції)
+# ... (parse_csv)
+# ... (parse_json)
+
 def parse_excel(raw_content: bytes, source_url: str):
     """
     Парсить вміст Excel-файлу (XLS/XLSX) і генерує OsbbRecordItem.
+    Вимагає pandas та openpyxl.
     """
-    # Це приклад, як би виглядала логіка, якщо Pandas доступний. 
-    # TODO Додати парсинг для excel.
     try:
+        # 1. Читаємо Excel-файл з бінарного вмісту в DataFrame
+        # io.BytesIO(raw_content) дозволяє pandas читати дані з пам'яті
         df = pd.read_excel(io.BytesIO(raw_content), engine='openpyxl')
-        for row_dict in df.to_dict('records'):
-            normalized_row = {
-                (k.strip().lower() if k is not None else ''): (str(v).strip() if v is not None else '')
-                for k, v in row_dict.items() 
-            }
-            # ... (Вся логіка збору, об'єднання адреси та фільтрації, як у parse_csv)
-            # ... (для прикладу: pass)
-            pass
-            
     except Exception as e:
         print(f"!!! ПОМИЛКА: Не вдалося прочитати Excel-файл {source_url}: {e}")
+        return
+
+    # 2. Перетворюємо DataFrame на список словників і обробляємо кожен рядок
+    for row_dict in df.to_dict('records'):
+        # Normalize keys (pandas columns) to lowercase for find_value_by_priority
+        source_record = {
+            (k.strip().lower() if k is not None else ''): (str(v).strip() if v is not None else '')
+            for k, v in row_dict.items() 
+        }
+        
+        osbb = OsbbRecordItem()
+        
+        # --- 1. Збір даних (Аналогічно CSV/JSON) ---
+        osbb['name'] = find_value_by_priority(source_record, 'name', FIELD_MAPPINGS)
+        osbb['edrpou'] = find_value_by_priority(source_record, 'edrpou', FIELD_MAPPINGS)
+        osbb['phone'] = find_value_by_priority(source_record, 'phone', FIELD_MAPPINGS)
+        osbb['email'] = find_value_by_priority(source_record, 'email', FIELD_MAPPINGS)
+        
+        osbb['region'] = find_value_by_priority(source_record, 'region', FIELD_MAPPINGS)
+        osbb['city'] = find_value_by_priority(source_record, 'city', FIELD_MAPPINGS)
+
+        # --- 2. Об'єднання адреси ---
+        final_address = find_value_by_priority(source_record, 'address_full', FIELD_MAPPINGS)
+        street = find_value_by_priority(source_record, 'address_street', FIELD_MAPPINGS)
+        house = find_value_by_priority(source_record, 'address_house', FIELD_MAPPINGS)
+       
+        if not final_address: 
+             final_address = ', '.join([p for p in [street, house] if p])
+        
+        osbb['address'] = final_address
+        osbb['source_dataset_url'] = source_url
+        
+        # --- 3. Фінальне очищення та фільтрація ---
+        for key in osbb.fields:
+            if osbb.get(key) is None:
+                osbb[key] = "" 
+
+        if osbb.get('edrpou') or osbb.get('address'):
+            yield osbb
+        else:
+            print(f"!!! ПОПЕРЕДЖЕННЯ: Пропущено рядок (немає ЄДРПОУ/Адреси) з Excel: {source_url}")
 
