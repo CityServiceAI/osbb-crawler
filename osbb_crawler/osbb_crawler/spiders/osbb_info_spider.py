@@ -6,7 +6,9 @@ from ..processors import process_file_content
 
 class OsbbRegistrySpider(scrapy.Spider):
     name = 'osbb_registry'
-    allowed_domains = ['data.gov.ua', 'admin-gis.khm.gov.ua'] 
+    allowed_domains = ['data.gov.ua', 'admin-gis.khm.gov.ua', 'opendata.gov.ua',
+                      'opendata.drohobych-rada.gov.ua', 'opendata.city-adm.lviv.ua', 
+                      'data.rada-uzhgorod.gov.ua', 'geo.lutskrada.gov.ua'] 
     
     # початковий URL сторінки пошуку 'осбб'
     start_urls = ['https://data.gov.ua/dataset?q=%D0%BE%D1%81%D0%B1%D0%B1&sort=score+desc%2C+metadata_modified+desc&_organization_limit=0']
