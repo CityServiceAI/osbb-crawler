@@ -29,6 +29,7 @@ __pycache__/
 *~
 .ipynb_checkpoints
 .pytest_cache/
+osbb_crawler/__pycache__/
 
 # --- IDE та Операційна Система ---
 # PyCharm / IntelliJ
