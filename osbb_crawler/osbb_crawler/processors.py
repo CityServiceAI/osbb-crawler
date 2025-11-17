@@ -48,7 +48,7 @@ def find_value_by_priority(record: dict, field_name: str, mappings: dict) -> str
     return None
 
 FIELD_MAPPINGS = {
-    'name': ['Назва', 'Назва ОСББ', 'Повна назва', 'OSBB_NAME', 'TheNameOfTheACMB', 'entityName', 'condominiumName', 'name_osbb'],
+    'name': ['Назва', 'Назва ОСББ', 'Повна назва', 'OSBB_NAME', 'TheNameOfTheACMB', 'entityName', 'condominiumName', 'name_osbb', 'name'],
     'edrpou': ['ЄДРПОУ', 'Код ЄДРПОУ', 'ЕДРПОУ','ЄДРПОУ', 'Code', 'EDRPOU', 'osbb_edrpoy', 'ЄДРПОУ / ПН'],
     'address': ['Адреса', 'Місцезнаходження', 'Юридична адреса', 'Юридична Адреса', 'Address', 'ADDR', 'LegalAddress', 'address_post_name', 'address', 'adressa_osbb', "Назва суб'єкта"],
     'phone': ['Телефон', 'Phone', 'osbb_phone', 'Phone_number', "Номер телефону", 'ContactTel', 'Контактний тел', 'контактний тел.'],
@@ -59,8 +59,8 @@ FIELD_MAPPINGS = {
     'region': ['Область', 'region', 'addressAdminUnitL2', 'address_admin_unit_l2'],
 
     # Компоненти адреси (використовуються для спеціальної логіки в parse_csv)
-    'address_street': ['addressThoroughfare', 'Street', 'Вулиця', 'address_thoroughfare'],
-    'address_house': ['addressLocatorDesignator', 'address_locator_designator', 'House', 'Номер будинку', 'будинок'],
+    'address_street': ['addressThoroughfare', 'Street', 'Вулиця', 'address_thoroughfare', 'actual_adress_street'],
+    'address_house': ['addressLocatorDesignator', 'address_locator_designator', 'House', 'Номер будинку', 'будинок', 'actual_adress_building'],
     
 }
 
