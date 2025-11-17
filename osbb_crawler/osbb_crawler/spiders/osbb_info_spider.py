@@ -1,5 +1,7 @@
 # osbb_crawler/spiders/osbb_registry_spider.py
 import scrapy
+import os
+import mimetypes
 from ..items import OsbbRecordItem
 from ..items import DatasetItem
 from ..processors import process_file_content
@@ -144,14 +146,27 @@ class OsbbRegistrySpider(scrapy.Spider):
         """
         dataset_item = response.meta.get('dataset_metadata')
         
-        # Отримуємо сирі байти або текст
         raw_content = response.body 
-        data_format = dataset_item['data_format']
+        # Використовуємо формат із метаданих як значення за замовчуванням
+        data_format = dataset_item['data_format'] 
         source_url = dataset_item['page_url']
+        download_link = dataset_item['download_link'] # Використовуємо link для визначення формату
 
-        self.logger.info(f"Обробка файлу: {dataset_item['download_link']} ({data_format})")
+        # --- КОРЕКЦІЯ ФОРМАТУ ЗА РОЗШИРЕННЯМ URL (КРОК ВИПРАВЛЕННЯ) ---
+        url_path = download_link.lower()
+        
+        if url_path.endswith('.xlsx') or url_path.endswith('.xls'):
+            data_format = 'XLSX'
+        elif url_path.endswith('.csv'):
+            data_format = 'CSV'
+        elif url_path.endswith('.json') or url_path.endswith('.geojson'):
+            data_format = 'JSON'
+        # Примітка: Інші формати (XML, API) можуть бути визначені через data_format з метаданих
+
+        # --- КІНЕЦЬ КОРЕКЦІЇ ФОРМАТУ ---
+
+        self.logger.info(f"Обробка файлу: {download_link} (Визначений формат: **{data_format}**)")
 
         # Передаємо роботу зовнішньому модулю process_file_content
-        # Цей генератор поверне нам готові об'єкти OsbbRecordItem
         for osbb_record in process_file_content(raw_content, data_format, source_url):
             yield osbb_record

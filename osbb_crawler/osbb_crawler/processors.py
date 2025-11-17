@@ -2,6 +2,7 @@
 import io
 import csv
 import json
+import re
 import pandas as pd
 from .items import OsbbRecordItem
 # Якщо потрібен Excel, тут знадобиться 'pandas' або 'openpyxl'
@@ -14,27 +15,43 @@ def find_value_by_priority(record: dict, field_name: str, mappings: dict) -> str
     """
     Знаходить значення в об'єкті 'record', перебираючи пріоритетні ключі 
     для заданого 'field_name' зі словника 'mappings'.
+    Використовує толерантний пошук (fuzzy matching), ігноруючи пунктуацію 
+    та пробіли, щоб обробити 'ЄДРПОУ.' або 'Адреса, юридична'.
     """
-    # 1. Отримуємо список можливих ключів для цього поля
     possible_keys = mappings.get(field_name, [])
     
-    # 2. Перебираємо всі можливі ключі
-    for key in possible_keys:
-        value = record.get(key.strip().lower()) 
-        
-        # 3. Якщо знайшли непорожнє значення, повертаємо його
-        if value:
-            # Можна додати тут очищення/нормалізацію значення (strip())
-            return str(value).strip()
+    # 1. Створюємо словник для швидкого пошуку, де ключі датасету очищені від пунктуації.
+    # Регулярний вираз r'[\W_]+' видаляє всі символи, що не є літерами чи цифрами, 
+    # включаючи пробіли та нижнє підкреслення.
+    cleaned_record_map = {}
+    for k, v in record.items():
+        if k is None:
+            continue
+        # Нормалізуємо та очищуємо ключ датасету
+        cleaned_key = re.sub(r'[\W_]+', '', str(k).strip().lower())
+        cleaned_record_map[cleaned_key] = v
+
+    # 2. Перебираємо всі можливі ключі з нашого FIELD_MAPPINGS
+    for mapping_key in possible_keys:
+        # Нормалізуємо ключ з наших мапінгів (теж очищуємо)
+        key_to_find = re.sub(r'[\W_]+', '', mapping_key).strip().lower()
+
+        # 3. Шукаємо по очищеному ключу в очищеній мапі
+        if key_to_find in cleaned_record_map:
+            value = cleaned_record_map[key_to_find]
+            
+            # Якщо знайшли непорожнє значення, повертаємо його
+            if value:
+                return str(value).strip()
             
     # Якщо нічого не знайдено, повертаємо None
     return None
 
 FIELD_MAPPINGS = {
     'name': ['Назва', 'Назва ОСББ', 'Повна назва', 'OSBB_NAME', 'TheNameOfTheACMB', 'entityName', 'condominiumName', 'name_osbb'],
-    'edrpou': ['ЄДРПОУ', 'Код ЄДРПОУ', 'ЕДРПОУ','ЄДРПОУ', 'Code', 'EDRPOU', 'osbb_edrpoy'],
-    'address': ['Адреса', 'Місцезнаходження', 'Юридична адреса', 'Юридична Адреса', 'Address', 'ADDR', 'LegalAddress', 'address_post_name', 'address', 'adressa_osbb'],
-    'phone': ['Телефон', 'Phone', 'osbb_phone', 'Phone_number', "Номер телефону", 'ContactTel', 'Контактний тел'],
+    'edrpou': ['ЄДРПОУ', 'Код ЄДРПОУ', 'ЕДРПОУ','ЄДРПОУ', 'Code', 'EDRPOU', 'osbb_edrpoy', 'ЄДРПОУ / ПН'],
+    'address': ['Адреса', 'Місцезнаходження', 'Юридична адреса', 'Юридична Адреса', 'Address', 'ADDR', 'LegalAddress', 'address_post_name', 'address', 'adressa_osbb', "Назва суб'єкта"],
+    'phone': ['Телефон', 'Phone', 'osbb_phone', 'Phone_number', "Номер телефону", 'ContactTel', 'Контактний тел', 'контактний тел.'],
     'email': ['Email', 'E-mail', 'Електронна пошта'],
 
     # Географічні одиниці (не використовуємо для 'address', оскільки воно об'єднується)
@@ -199,7 +216,7 @@ def parse_json(raw_content: bytes, source_url: str):
         
         # --- 2. Об'єднання адреси ---
         # Спочатку шукаємо повну адресу
-        final_address = find_value_by_priority(source_record, 'address_full', FIELD_MAPPINGS)
+        final_address = find_value_by_priority(source_record, 'address', FIELD_MAPPINGS)
         
         # Якщо повну адресу не знайдено, пробуємо зібрати з компонентів
         street = find_value_by_priority(source_record, 'address_street', FIELD_MAPPINGS)
